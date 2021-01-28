@@ -30,7 +30,6 @@ import org.apache.kafka.trogdor.common.CapturingCommandRunner;
 import org.apache.kafka.trogdor.common.ExpectedTasks;
 import org.apache.kafka.trogdor.common.ExpectedTasks.ExpectedTaskBuilder;
 import org.apache.kafka.trogdor.common.MiniTrogdorCluster;
-
 import org.apache.kafka.trogdor.fault.NetworkPartitionFaultSpec;
 import org.apache.kafka.trogdor.rest.CoordinatorStatusResponse;
 import org.apache.kafka.trogdor.rest.CreateTaskRequest;
@@ -39,21 +38,22 @@ import org.apache.kafka.trogdor.rest.RequestConflictException;
 import org.apache.kafka.trogdor.rest.StopTaskRequest;
 import org.apache.kafka.trogdor.rest.TaskDone;
 import org.apache.kafka.trogdor.rest.TaskPending;
-import org.apache.kafka.trogdor.rest.TaskRunning;
 import org.apache.kafka.trogdor.rest.TaskRequest;
+import org.apache.kafka.trogdor.rest.TaskRunning;
+import org.apache.kafka.trogdor.rest.TaskState;
 import org.apache.kafka.trogdor.rest.TaskStateType;
 import org.apache.kafka.trogdor.rest.TasksRequest;
-import org.apache.kafka.trogdor.rest.TaskState;
 import org.apache.kafka.trogdor.rest.TasksResponse;
+import org.apache.kafka.trogdor.rest.UptimeResponse;
 import org.apache.kafka.trogdor.rest.WorkerDone;
 import org.apache.kafka.trogdor.rest.WorkerRunning;
 import org.apache.kafka.trogdor.task.NoOpTaskSpec;
 import org.apache.kafka.trogdor.task.SampleTaskSpec;
-import org.junit.Rule;
-import org.junit.rules.Timeout;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.junit.Test;
 
 import javax.ws.rs.NotFoundException;
 import java.util.ArrayList;
@@ -62,16 +62,18 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.fail;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@Tag("integration")
+@Timeout(value = 120000, unit = MILLISECONDS)
 public class CoordinatorTest {
-    private static final Logger log = LoggerFactory.getLogger(CoordinatorTest.class);
 
-    @Rule
-    final public Timeout globalTimeout = Timeout.millis(120000);
+    private static final Logger log = LoggerFactory.getLogger(CoordinatorTest.class);
 
     @Test
     public void testCoordinatorStatus() throws Exception {
@@ -80,6 +82,22 @@ public class CoordinatorTest {
                 build()) {
             CoordinatorStatusResponse status = cluster.coordinatorClient().status();
             assertEquals(cluster.coordinator().status(), status);
+        }
+    }
+
+    @Test
+    public void testCoordinatorUptime() throws Exception {
+        MockTime time = new MockTime(0, 200, 0);
+        Scheduler scheduler = new MockScheduler(time);
+        try (MiniTrogdorCluster cluster = new MiniTrogdorCluster.Builder().
+            addCoordinator("node01").
+            scheduler(scheduler).
+            build()) {
+            UptimeResponse uptime = cluster.coordinatorClient().uptime();
+            assertEquals(cluster.coordinator().uptime(), uptime);
+
+            time.setCurrentTimeMs(250);
+            assertNotEquals(cluster.coordinator().uptime(), uptime);
         }
     }
 
@@ -108,14 +126,10 @@ public class CoordinatorTest {
                 new CreateTaskRequest("foo", fooSpec));
 
             // Re-creating a task with different arguments gives a RequestConflictException.
-            try {
-                NoOpTaskSpec barSpec = new NoOpTaskSpec(1000, 2000);
-                cluster.coordinatorClient().createTask(
-                    new CreateTaskRequest("foo", barSpec));
-                fail("Expected to get an exception when re-creating a task with a " +
-                    "different task spec.");
-            } catch (RequestConflictException exception) {
-            }
+            NoOpTaskSpec barSpec = new NoOpTaskSpec(1000, 2000);
+            assertThrows(RequestConflictException.class, () -> cluster.coordinatorClient().createTask(
+                new CreateTaskRequest("foo", barSpec)),
+                "Recreating task with different task spec is not allowed");
 
             time.sleep(2);
             new ExpectedTasks().
@@ -630,10 +644,7 @@ public class CoordinatorTest {
                 waitFor(coordinatorClient).
                 waitFor(cluster.agentClient("node02"));
 
-            try {
-                coordinatorClient.task(new TaskRequest("non-existent-foo"));
-                fail("Non existent task request should have raised a NotFoundException");
-            } catch (NotFoundException ignored) { }
+            assertThrows(NotFoundException.class, () -> coordinatorClient.task(new TaskRequest("non-existent-foo")));
         }
     }
 

@@ -16,7 +16,6 @@
 import time
 
 from ducktape.mark import matrix
-from ducktape.mark import parametrize
 from ducktape.mark.resource import cluster
 from ducktape.tests.test import Test
 from ducktape.utils.util import wait_until
@@ -63,7 +62,7 @@ class ConsoleConsumerTest(Test):
         node = self.consumer.nodes[0]
 
         wait_until(lambda: self.consumer.alive(node),
-            timeout_sec=10, backoff_sec=.2, err_msg="Consumer was too slow to start")
+            timeout_sec=20, backoff_sec=.2, err_msg="Consumer was too slow to start")
         self.logger.info("consumer started in %s seconds " % str(time.time() - t0))
 
         # Verify that log output is happening

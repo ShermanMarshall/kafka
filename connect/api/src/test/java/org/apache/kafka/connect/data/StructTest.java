@@ -17,9 +17,8 @@
 package org.apache.kafka.connect.data;
 
 import org.apache.kafka.connect.errors.DataException;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.ExpectedException;
+
+import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
@@ -27,9 +26,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 
 public class StructTest {
@@ -115,38 +115,43 @@ public class StructTest {
     // tests in SchemaTest. These are meant to ensure that we are invoking the same code path and that we do deeper
     // inspection than just checking the class of the object
 
-    @Test(expected = DataException.class)
+    @Test
     public void testInvalidFieldType() {
-        new Struct(FLAT_STRUCT_SCHEMA).put("int8", "should fail because this is a string, not int8");
+        assertThrows(DataException.class,
+            () -> new Struct(FLAT_STRUCT_SCHEMA).put("int8", "should fail because this is a string, not int8"));
     }
 
-    @Test(expected = DataException.class)
+    @Test
     public void testInvalidArrayFieldElements() {
-        new Struct(NESTED_SCHEMA).put("array", Arrays.asList("should fail since elements should be int8s"));
+        assertThrows(DataException.class,
+            () -> new Struct(NESTED_SCHEMA).put("array", Collections.singletonList("should fail since elements should be int8s")));
     }
 
-    @Test(expected = DataException.class)
+    @Test
     public void testInvalidMapKeyElements() {
-        new Struct(NESTED_SCHEMA).put("map", Collections.singletonMap("should fail because keys should be int8s", (byte) 12));
+        assertThrows(DataException.class,
+            () -> new Struct(NESTED_SCHEMA).put("map", Collections.singletonMap("should fail because keys should be int8s", (byte) 12)));
     }
 
-    @Test(expected = DataException.class)
+    @Test
     public void testInvalidStructFieldSchema() {
-        new Struct(NESTED_SCHEMA).put("nested", new Struct(MAP_SCHEMA));
+        assertThrows(DataException.class,
+            () -> new Struct(NESTED_SCHEMA).put("nested", new Struct(MAP_SCHEMA)));
     }
 
-    @Test(expected = DataException.class)
+    @Test
     public void testInvalidStructFieldValue() {
-        new Struct(NESTED_SCHEMA).put("nested", new Struct(NESTED_CHILD_SCHEMA));
+        assertThrows(DataException.class,
+            () -> new Struct(NESTED_SCHEMA).put("nested", new Struct(NESTED_CHILD_SCHEMA)));
     }
 
 
-    @Test(expected = DataException.class)
+    @Test
     public void testMissingFieldValidation() {
         // Required int8 field
         Schema schema = SchemaBuilder.struct().field("field", REQUIRED_FIELD_SCHEMA).build();
         Struct struct = new Struct(schema);
-        struct.validate();
+        assertThrows(DataException.class, struct::validate);
     }
 
     @Test
@@ -285,9 +290,6 @@ public class StructTest {
         assertNotEquals(struct2.hashCode(), struct3.hashCode());
     }
 
-    @Rule
-    public ExpectedException thrown = ExpectedException.none();
-
     @Test
     public void testValidateStructWithNullValue() {
         Schema schema = SchemaBuilder.struct()
@@ -297,9 +299,9 @@ public class StructTest {
                 .build();
 
         Struct struct = new Struct(schema);
-        thrown.expect(DataException.class);
-        thrown.expectMessage("Invalid value: null used for required field: \"one\", schema type: STRING");
-        struct.validate();
+        Exception e = assertThrows(DataException.class, struct::validate);
+        assertEquals("Invalid value: null used for required field: \"one\", schema type: STRING",
+            e.getMessage());
     }
 
     @Test
@@ -307,13 +309,15 @@ public class StructTest {
         String fieldName = "field";
         FakeSchema fakeSchema = new FakeSchema();
 
-        thrown.expect(DataException.class);
-        thrown.expectMessage("Invalid Java object for schema type null: class java.lang.Object for field: \"field\"");
-        ConnectSchema.validateValue(fieldName, fakeSchema, new Object());
+        Exception e = assertThrows(DataException.class, () -> ConnectSchema.validateValue(fieldName,
+            fakeSchema, new Object()));
+        assertEquals("Invalid Java object for schema type null: class java.lang.Object for field: \"field\"",
+            e.getMessage());
 
-        thrown.expect(DataException.class);
-        thrown.expectMessage("Invalid Java object for schema type INT8: class java.lang.Object for field: \"field\"");
-        ConnectSchema.validateValue(fieldName, Schema.INT8_SCHEMA, new Object());
+        e = assertThrows(DataException.class, () -> ConnectSchema.validateValue(fieldName,
+            Schema.INT8_SCHEMA, new Object()));
+        assertEquals("Invalid Java object for schema type INT8: class java.lang.Object for field: \"field\"",
+            e.getMessage());
     }
 
     @Test
@@ -323,9 +327,7 @@ public class StructTest {
             .field(fieldName, Schema.STRING_SCHEMA);
         Struct struct = new Struct(testSchema);
 
-        thrown.expect(DataException.class);
-        Field field = null;
-        struct.put(field, "valid");
+        assertThrows(DataException.class, () -> struct.put((Field) null, "valid"));
     }
 
     @Test
@@ -335,8 +337,8 @@ public class StructTest {
             .field(fieldName, Schema.STRING_SCHEMA);
         Struct struct = new Struct(testSchema);
 
-        thrown.expect(DataException.class);
-        thrown.expectMessage("Invalid value: null used for required field: \"fieldName\", schema type: STRING");
-        struct.put(fieldName, null);
+        Exception e = assertThrows(DataException.class, () -> struct.put(fieldName, null));
+        assertEquals("Invalid value: null used for required field: \"fieldName\", schema type: STRING",
+            e.getMessage());
     }
 }

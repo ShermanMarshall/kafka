@@ -27,20 +27,23 @@ import org.apache.kafka.streams.processor.Punctuator;
 import org.apache.kafka.streams.processor.TaskId;
 import org.apache.kafka.streams.processor.To;
 import org.apache.kafka.streams.state.KeyValueStore;
-import org.apache.kafka.streams.state.internals.InMemoryKeyValueStore;
-import org.junit.Test;
+
+import org.apache.kafka.streams.state.StoreBuilder;
+import org.apache.kafka.streams.state.Stores;
+import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.time.Duration;
 import java.util.Iterator;
 import java.util.Properties;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
+@SuppressWarnings("deprecation") // this is a test of a deprecated API
 public class MockProcessorContextTest {
     @Test
     public void shouldCaptureOutputRecords() {
@@ -158,7 +161,6 @@ public class MockProcessorContextTest {
     @Test
     public void shouldThrowIfForwardedWithDeprecatedChildIndex() {
         final AbstractProcessor<String, Long> processor = new AbstractProcessor<String, Long>() {
-            @SuppressWarnings("deprecation")
             @Override
             public void process(final String key, final Long value) {
                 context().forward(key, value, 0);
@@ -180,7 +182,6 @@ public class MockProcessorContextTest {
     @Test
     public void shouldThrowIfForwardedWithDeprecatedChildName() {
         final AbstractProcessor<String, Long> processor = new AbstractProcessor<String, Long>() {
-            @SuppressWarnings("deprecation")
             @Override
             public void process(final String key, final Long value) {
                 context().forward(key, value, "child1");
@@ -235,18 +236,23 @@ public class MockProcessorContextTest {
         final AbstractProcessor<String, Long> processor = new AbstractProcessor<String, Long>() {
             @Override
             public void process(final String key, final Long value) {
-                @SuppressWarnings("unchecked")
-                final KeyValueStore<String, Long> stateStore = (KeyValueStore<String, Long>) context().getStateStore("my-state");
+                final KeyValueStore<String, Long> stateStore = context().getStateStore("my-state");
                 stateStore.put(key, (stateStore.get(key) == null ? 0 : stateStore.get(key)) + value);
                 stateStore.put("all", (stateStore.get("all") == null ? 0 : stateStore.get("all")) + value);
             }
         };
 
         final MockProcessorContext context = new MockProcessorContext();
-        final KeyValueStore<String, Long> store = new InMemoryKeyValueStore<>("my-state", Serdes.String(), Serdes.Long());
-        context.register(store, null);
+
+        final StoreBuilder<KeyValueStore<String, Long>> storeBuilder = Stores.keyValueStoreBuilder(
+                Stores.inMemoryKeyValueStore("my-state"),
+                Serdes.String(),
+                Serdes.Long()).withLoggingDisabled();
+
+        final KeyValueStore<String, Long> store = storeBuilder.build();
 
         store.init(context, store);
+
         processor.init(context);
 
         processor.process("foo", 5L);
@@ -261,7 +267,6 @@ public class MockProcessorContextTest {
     public void shouldCaptureApplicationAndRecordMetadata() {
         final Properties config = new Properties();
         config.put(StreamsConfig.APPLICATION_ID_CONFIG, "testMetadata");
-        config.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "");
 
         final AbstractProcessor<String, Object> processor = new AbstractProcessor<String, Object>() {
             @Override
@@ -383,7 +388,6 @@ public class MockProcessorContextTest {
     public void fullConstructorShouldSetAllExpectedAttributes() {
         final Properties config = new Properties();
         config.put(StreamsConfig.APPLICATION_ID_CONFIG, "testFullConstructor");
-        config.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "");
         config.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         config.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.Long().getClass());
 

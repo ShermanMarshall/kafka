@@ -16,10 +16,8 @@
  */
 package org.apache.kafka.streams.kstream;
 
-import org.apache.kafka.common.internals.Topic;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.utils.Bytes;
-import org.apache.kafka.streams.internals.ApiUtils;
 import org.apache.kafka.streams.processor.StateStore;
 import org.apache.kafka.streams.state.KeyValueBytesStoreSupplier;
 import org.apache.kafka.streams.state.KeyValueStore;
@@ -35,6 +33,7 @@ import java.util.Map;
 import java.util.Objects;
 
 import static org.apache.kafka.streams.internals.ApiUtils.prepareMillisCheckFailMsgPrefix;
+import static org.apache.kafka.streams.internals.ApiUtils.validateMillisecondDuration;
 
 /**
  * Used to describe how a {@link StateStore} should be materialized.
@@ -100,7 +99,7 @@ public class Materialized<K, V, S extends StateStore> {
      * @return a new {@link Materialized} instance with the given storeName
      */
     public static <K, V, S extends StateStore> Materialized<K, V, S> as(final String storeName) {
-        Topic.validate(storeName);
+        Named.validate(storeName);
         return new Materialized<>(storeName);
     }
 
@@ -251,7 +250,7 @@ public class Materialized<K, V, S extends StateStore> {
      */
     public Materialized<K, V, S> withRetention(final Duration retention) throws IllegalArgumentException {
         final String msgPrefix = prepareMillisCheckFailMsgPrefix(retention, "retention");
-        final long retenationMs = ApiUtils.validateMillisecondDuration(retention, msgPrefix);
+        final long retenationMs = validateMillisecondDuration(retention, msgPrefix);
 
         if (retenationMs < 0) {
             throw new IllegalArgumentException("Retention must not be negative.");

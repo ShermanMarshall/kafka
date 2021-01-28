@@ -32,21 +32,26 @@ import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
-import static org.apache.kafka.clients.producer.ProducerConfig.COMPRESSION_TYPE_CONFIG;
-import static org.apache.kafka.clients.producer.ProducerConfig.ACKS_CONFIG;
-import static org.apache.kafka.clients.producer.ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG;
-import static org.apache.kafka.clients.producer.ProducerConfig.MAX_BLOCK_MS_CONFIG;
-import static org.apache.kafka.clients.producer.ProducerConfig.RETRIES_CONFIG;
-import static org.apache.kafka.clients.producer.ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG;
-import static org.apache.kafka.clients.producer.ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG;
 import static org.apache.kafka.clients.CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG;
 import static org.apache.kafka.clients.CommonClientConfigs.SECURITY_PROTOCOL_CONFIG;
-import static org.apache.kafka.common.config.SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG;
-import static org.apache.kafka.common.config.SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG;
-import static org.apache.kafka.common.config.SslConfigs.SSL_KEYSTORE_TYPE_CONFIG;
+import static org.apache.kafka.clients.producer.ProducerConfig.ACKS_CONFIG;
+import static org.apache.kafka.clients.producer.ProducerConfig.BATCH_SIZE_CONFIG;
+import static org.apache.kafka.clients.producer.ProducerConfig.COMPRESSION_TYPE_CONFIG;
+import static org.apache.kafka.clients.producer.ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG;
+import static org.apache.kafka.clients.producer.ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG;
+import static org.apache.kafka.clients.producer.ProducerConfig.LINGER_MS_CONFIG;
+import static org.apache.kafka.clients.producer.ProducerConfig.MAX_BLOCK_MS_CONFIG;
+import static org.apache.kafka.clients.producer.ProducerConfig.RETRIES_CONFIG;
+import static org.apache.kafka.clients.producer.ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG;
+import static org.apache.kafka.common.config.SaslConfigs.SASL_JAAS_CONFIG;
+import static org.apache.kafka.common.config.SaslConfigs.SASL_KERBEROS_SERVICE_NAME;
+import static org.apache.kafka.common.config.SaslConfigs.SASL_MECHANISM;
+import static org.apache.kafka.common.config.SslConfigs.SSL_ENGINE_FACTORY_CLASS_CONFIG;
 import static org.apache.kafka.common.config.SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG;
 import static org.apache.kafka.common.config.SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG;
-import static org.apache.kafka.common.config.SaslConfigs.SASL_KERBEROS_SERVICE_NAME;
+import static org.apache.kafka.common.config.SslConfigs.SSL_KEYSTORE_TYPE_CONFIG;
+import static org.apache.kafka.common.config.SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG;
+import static org.apache.kafka.common.config.SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG;
 
 /**
  * A log4j appender that produces log messages to Kafka
@@ -63,13 +68,18 @@ public class KafkaLog4jAppender extends AppenderSkeleton {
     private String sslKeystoreLocation;
     private String sslKeystorePassword;
     private String saslKerberosServiceName;
+    private String saslMechanism;
     private String clientJaasConfPath;
+    private String clientJaasConf;
     private String kerb5ConfPath;
     private Integer maxBlockMs;
+    private String sslEngineFactoryClass;
 
     private int retries = Integer.MAX_VALUE;
     private int requiredNumAcks = 1;
     private int deliveryTimeoutMs = 120000;
+    private int lingerMs = 0;
+    private int batchSize = 16384;
     private boolean ignoreExceptions = true;
     private boolean syncSend;
     private Producer<byte[], byte[]> producer;
@@ -92,6 +102,22 @@ public class KafkaLog4jAppender extends AppenderSkeleton {
 
     public void setRequiredNumAcks(int requiredNumAcks) {
         this.requiredNumAcks = requiredNumAcks;
+    }
+
+    public int getLingerMs() {
+        return lingerMs;
+    }
+
+    public void setLingerMs(int lingerMs) {
+        this.lingerMs = lingerMs;
+    }
+
+    public int getBatchSize() {
+        return batchSize;
+    }
+
+    public void setBatchSize(int batchSize) {
+        this.batchSize = batchSize;
     }
 
     public int getRetries() {
@@ -210,6 +236,22 @@ public class KafkaLog4jAppender extends AppenderSkeleton {
         return clientJaasConfPath;
     }
 
+    public void setSaslMechanism(String saslMechanism) {
+        this.saslMechanism = saslMechanism;
+    }
+
+    public String getSaslMechanism() {
+        return this.saslMechanism;
+    }
+
+    public void setClientJaasConf(final String clientJaasConf) {
+        this.clientJaasConf = clientJaasConf;
+    }
+
+    public String getClientJaasConf() {
+        return this.clientJaasConf;
+    }
+
     public String getKerb5ConfPath() {
         return kerb5ConfPath;
     }
@@ -220,6 +262,14 @@ public class KafkaLog4jAppender extends AppenderSkeleton {
 
     public void setMaxBlockMs(int maxBlockMs) {
         this.maxBlockMs = maxBlockMs;
+    }
+
+    public String getSslEngineFactoryClass() {
+        return sslEngineFactoryClass;
+    }
+
+    public void setSslEngineFactoryClass(String sslEngineFactoryClass) {
+        this.sslEngineFactoryClass = sslEngineFactoryClass;
     }
 
     @Override
@@ -238,28 +288,43 @@ public class KafkaLog4jAppender extends AppenderSkeleton {
         props.put(ACKS_CONFIG, Integer.toString(requiredNumAcks));
         props.put(RETRIES_CONFIG, retries);
         props.put(DELIVERY_TIMEOUT_MS_CONFIG, deliveryTimeoutMs);
+        props.put(LINGER_MS_CONFIG, lingerMs);
+        props.put(BATCH_SIZE_CONFIG, batchSize);
 
         if (securityProtocol != null) {
             props.put(SECURITY_PROTOCOL_CONFIG, securityProtocol);
         }
-        if (securityProtocol != null && securityProtocol.contains("SSL") && sslTruststoreLocation != null &&
-            sslTruststorePassword != null) {
+
+        if (securityProtocol != null && (securityProtocol.contains("SSL") || securityProtocol.contains("SASL"))) {
+            if (sslEngineFactoryClass != null) {
+                props.put(SSL_ENGINE_FACTORY_CLASS_CONFIG, sslEngineFactoryClass);
+            }
+        }
+
+        if (securityProtocol != null && securityProtocol.contains("SSL") && sslTruststoreLocation != null && sslTruststorePassword != null) {
             props.put(SSL_TRUSTSTORE_LOCATION_CONFIG, sslTruststoreLocation);
             props.put(SSL_TRUSTSTORE_PASSWORD_CONFIG, sslTruststorePassword);
 
             if (sslKeystoreType != null && sslKeystoreLocation != null &&
-                sslKeystorePassword != null) {
+                    sslKeystorePassword != null) {
                 props.put(SSL_KEYSTORE_TYPE_CONFIG, sslKeystoreType);
                 props.put(SSL_KEYSTORE_LOCATION_CONFIG, sslKeystoreLocation);
                 props.put(SSL_KEYSTORE_PASSWORD_CONFIG, sslKeystorePassword);
             }
         }
+
         if (securityProtocol != null && securityProtocol.contains("SASL") && saslKerberosServiceName != null && clientJaasConfPath != null) {
             props.put(SASL_KERBEROS_SERVICE_NAME, saslKerberosServiceName);
             System.setProperty("java.security.auth.login.config", clientJaasConfPath);
-            if (kerb5ConfPath != null) {
-                System.setProperty("java.security.krb5.conf", kerb5ConfPath);
-            }
+        }
+        if (kerb5ConfPath != null) {
+            System.setProperty("java.security.krb5.conf", kerb5ConfPath);
+        }
+        if (saslMechanism != null) {
+            props.put(SASL_MECHANISM, saslMechanism);
+        }
+        if (clientJaasConf != null) {
+            props.put(SASL_JAAS_CONFIG, clientJaasConf);
         }
         if (maxBlockMs != null) {
             props.put(MAX_BLOCK_MS_CONFIG, maxBlockMs);

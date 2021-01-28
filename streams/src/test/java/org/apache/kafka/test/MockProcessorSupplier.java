@@ -47,7 +47,12 @@ public class MockProcessorSupplier<K, V> implements ProcessorSupplier<K, V> {
     @Override
     public Processor<K, V> get() {
         final MockProcessor<K, V> processor = new MockProcessor<>(punctuationType, scheduleInterval);
-        processors.add(processor);
+
+        // to keep tests simple, ignore calls from ApiUtils.checkSupplier
+        if (!StreamsTestUtils.isCheckSupplierCall()) {
+            processors.add(processor);
+        }
+
         return processor;
     }
 
@@ -56,7 +61,11 @@ public class MockProcessorSupplier<K, V> implements ProcessorSupplier<K, V> {
         return capturedProcessors(1).get(0);
     }
 
-    // get the captured processors with the expected number
+    public int capturedProcessorsCount() {
+        return processors.size();
+    }
+
+        // get the captured processors with the expected number
     public List<MockProcessor<K, V>> capturedProcessors(final int expectedNumberOfProcessors) {
         assertEquals(expectedNumberOfProcessors, processors.size());
 

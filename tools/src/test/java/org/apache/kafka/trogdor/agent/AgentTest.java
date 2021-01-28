@@ -17,6 +17,12 @@
 
 package org.apache.kafka.trogdor.agent;
 
+import static java.util.Arrays.asList;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
 import com.fasterxml.jackson.databind.node.TextNode;
 import org.apache.kafka.common.utils.MockScheduler;
 import org.apache.kafka.common.utils.MockTime;
@@ -28,48 +34,49 @@ import org.apache.kafka.trogdor.basic.BasicPlatform;
 import org.apache.kafka.trogdor.basic.BasicTopology;
 import org.apache.kafka.trogdor.common.ExpectedTasks;
 import org.apache.kafka.trogdor.common.ExpectedTasks.ExpectedTaskBuilder;
+import org.apache.kafka.trogdor.common.JsonUtil;
 import org.apache.kafka.trogdor.common.Node;
+import org.apache.kafka.trogdor.common.Platform;
 import org.apache.kafka.trogdor.fault.FilesUnreadableFaultSpec;
 import org.apache.kafka.trogdor.fault.Kibosh;
 import org.apache.kafka.trogdor.fault.Kibosh.KiboshControlFile;
 import org.apache.kafka.trogdor.fault.Kibosh.KiboshFilesUnreadableFaultSpec;
 import org.apache.kafka.trogdor.rest.AgentStatusResponse;
-
 import org.apache.kafka.trogdor.rest.CreateWorkerRequest;
 import org.apache.kafka.trogdor.rest.DestroyWorkerRequest;
 import org.apache.kafka.trogdor.rest.JsonRestServer;
 import org.apache.kafka.trogdor.rest.RequestConflictException;
 import org.apache.kafka.trogdor.rest.StopWorkerRequest;
 import org.apache.kafka.trogdor.rest.TaskDone;
+import org.apache.kafka.trogdor.rest.UptimeResponse;
 import org.apache.kafka.trogdor.rest.WorkerDone;
 import org.apache.kafka.trogdor.rest.WorkerRunning;
 import org.apache.kafka.trogdor.task.NoOpTaskSpec;
 import org.apache.kafka.trogdor.task.SampleTaskSpec;
-import org.junit.Assert;
-import org.junit.Rule;
-import org.junit.rules.Timeout;
-import org.junit.Test;
+import org.apache.kafka.trogdor.task.TaskSpec;
+import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.TreeMap;
+import org.junit.jupiter.api.Timeout;
 
-import static org.junit.Assert.assertEquals;
-
+@Timeout(value = 120000, unit = MILLISECONDS)
 public class AgentTest {
-    @Rule
-    final public Timeout globalTimeout = Timeout.millis(120000);
 
     private static BasicPlatform createBasicPlatform(Scheduler scheduler) {
         TreeMap<String, Node> nodes = new TreeMap<>();
         HashMap<String, String> config = new HashMap<>();
+        config.put(Platform.Config.TROGDOR_AGENT_PORT, Integer.toString(Agent.DEFAULT_PORT));
         nodes.put("node01", new BasicNode("node01", "localhost",
-            config, Collections.<String>emptySet()));
+            config, Collections.emptySet()));
         BasicTopology topology = new BasicTopology(nodes);
         return new BasicPlatform("node01", topology,
             scheduler, new BasicPlatform.ShellCommandRunner());
@@ -132,6 +139,7 @@ public class AgentTest {
         AgentClient client = new AgentClient.Builder().
             maxTries(10).target("localhost", agent.port()).build();
         AgentStatusResponse status = client.status();
+
         assertEquals(Collections.emptyMap(), status.workers());
         new ExpectedTasks().waitFor(client);
 
@@ -145,6 +153,23 @@ public class AgentTest {
             taskState(new TaskDone(fooSpec, actualStartTimeMs, doneMs, "worker expired", false, null)).
             build()).
             waitFor(client);
+    }
+
+    @Test
+    public void testAgentGetUptime() throws Exception {
+        MockTime time = new MockTime(0, 111, 0);
+        MockScheduler scheduler = new MockScheduler(time);
+        Agent agent = createAgent(scheduler);
+        AgentClient client = new AgentClient.Builder().
+            maxTries(10).target("localhost", agent.port()).build();
+
+        UptimeResponse uptime = client.uptime();
+        assertEquals(agent.uptime(), uptime);
+
+        time.setCurrentTimeMs(150);
+        assertNotEquals(agent.uptime(), uptime);
+        agent.beginShutdown();
+        agent.waitForShutdown();
     }
 
     @Test
@@ -169,16 +194,12 @@ public class AgentTest {
         client.createWorker(new CreateWorkerRequest(1, "bar", barSpec));
         client.createWorker(new CreateWorkerRequest(1, "bar", barSpec));
 
-        try {
-            client.createWorker(new CreateWorkerRequest(1, "foo", barSpec));
-            Assert.fail("Expected RequestConflictException when re-creating a request with a different taskId.");
-        } catch (RequestConflictException exception) {
-        }
-        try {
-            client.createWorker(new CreateWorkerRequest(1, "bar", fooSpec));
-            Assert.fail("Expected RequestConflictException when re-creating a request with a different spec.");
-        } catch (RequestConflictException exception) {
-        }
+        assertThrows(RequestConflictException.class,
+            () -> client.createWorker(new CreateWorkerRequest(1, "foo", barSpec)),
+            "Recreating a request with a different taskId is not allowed");
+        assertThrows(RequestConflictException.class,
+            () -> client.createWorker(new CreateWorkerRequest(1, "bar", fooSpec)),
+            "Recreating a request with a different spec is not allowed");
 
         new ExpectedTasks().
             addTask(new ExpectedTaskBuilder("foo").
@@ -345,7 +366,7 @@ public class AgentTest {
         new ExpectedTasks().waitFor(client);
 
         try (MockKibosh mockKibosh = new MockKibosh()) {
-            Assert.assertEquals(KiboshControlFile.EMPTY, mockKibosh.read());
+            assertEquals(KiboshControlFile.EMPTY, mockKibosh.read());
             FilesUnreadableFaultSpec fooSpec = new FilesUnreadableFaultSpec(0, 900000,
                 Collections.singleton("myAgent"), mockKibosh.tempDir.getPath(), "/foo", 123);
             client.createWorker(new CreateWorkerRequest(0, "foo", fooSpec));
@@ -354,7 +375,7 @@ public class AgentTest {
                     workerState(new WorkerRunning("foo", fooSpec, 0, new TextNode("Added fault foo"))).
                     build()).
                 waitFor(client);
-            Assert.assertEquals(new KiboshControlFile(Collections.<Kibosh.KiboshFaultSpec>singletonList(
+            assertEquals(new KiboshControlFile(Collections.singletonList(
                 new KiboshFilesUnreadableFaultSpec("/foo", 123))), mockKibosh.read());
             FilesUnreadableFaultSpec barSpec = new FilesUnreadableFaultSpec(0, 900000,
                 Collections.singleton("myAgent"), mockKibosh.tempDir.getPath(), "/bar", 456);
@@ -365,10 +386,10 @@ public class AgentTest {
                 addTask(new ExpectedTaskBuilder("bar").
                     workerState(new WorkerRunning("bar", barSpec, 0, new TextNode("Added fault bar"))).build()).
                 waitFor(client);
-            Assert.assertEquals(new KiboshControlFile(new ArrayList<Kibosh.KiboshFaultSpec>() {{
-                    add(new KiboshFilesUnreadableFaultSpec("/foo", 123));
-                    add(new KiboshFilesUnreadableFaultSpec("/bar", 456));
-                }}), mockKibosh.read());
+            assertEquals(new KiboshControlFile(asList(
+                new KiboshFilesUnreadableFaultSpec("/foo", 123),
+                new KiboshFilesUnreadableFaultSpec("/bar", 456))
+            ), mockKibosh.read());
             time.sleep(1);
             client.stopWorker(new StopWorkerRequest(0));
             new ExpectedTasks().
@@ -377,7 +398,7 @@ public class AgentTest {
                 addTask(new ExpectedTaskBuilder("bar").
                     workerState(new WorkerRunning("bar", barSpec, 0, new TextNode("Added fault bar"))).build()).
                 waitFor(client);
-            Assert.assertEquals(new KiboshControlFile(Collections.<Kibosh.KiboshFaultSpec>singletonList(
+            assertEquals(new KiboshControlFile(Collections.singletonList(
                 new KiboshFilesUnreadableFaultSpec("/bar", 456))), mockKibosh.read());
         }
     }
@@ -428,4 +449,42 @@ public class AgentTest {
         agent.beginShutdown();
         agent.waitForShutdown();
     }
+
+    static void testExec(Agent agent, String expected, boolean expectedReturn, TaskSpec spec) throws Exception {
+        ByteArrayOutputStream b = new ByteArrayOutputStream();
+        PrintStream p = new PrintStream(b, true, StandardCharsets.UTF_8.toString());
+        boolean actualReturn = agent.exec(spec, p);
+        assertEquals(expected, b.toString());
+        assertEquals(expectedReturn, actualReturn);
+    }
+
+    @Test
+    public void testAgentExecWithTimeout() throws Exception {
+        Agent agent = createAgent(Scheduler.SYSTEM);
+        NoOpTaskSpec spec = new NoOpTaskSpec(0, 1);
+        TaskSpec rebasedSpec = agent.rebaseTaskSpecTime(spec);
+        testExec(agent,
+            String.format("Waiting for completion of task:%s%n",
+                JsonUtil.toPrettyJsonString(rebasedSpec)) +
+            String.format("Task failed with status null and error worker expired%n"),
+            false, rebasedSpec);
+        agent.beginShutdown();
+        agent.waitForShutdown();
+    }
+
+    @Test
+    public void testAgentExecWithNormalExit() throws Exception {
+        Agent agent = createAgent(Scheduler.SYSTEM);
+        SampleTaskSpec spec = new SampleTaskSpec(0, 120000,
+            Collections.singletonMap("node01", 1L), "");
+        TaskSpec rebasedSpec = agent.rebaseTaskSpecTime(spec);
+        testExec(agent,
+            String.format("Waiting for completion of task:%s%n",
+                JsonUtil.toPrettyJsonString(rebasedSpec)) +
+                String.format("Task succeeded with status \"halted\"%n"),
+            true, rebasedSpec);
+        agent.beginShutdown();
+        agent.waitForShutdown();
+    }
+
 };
